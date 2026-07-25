@@ -6,16 +6,17 @@ import urllib.parse
 def get_real_mp4_meta(video_url):
     """
     Membaca atom MP4 (stts, mdhd, tkhd) khusus untuk Video Track ('vide').
-    Mendukung deteksi dinamis riil dari 15 FPS sampai 240 FPS+ tanpa limit buatan.
+    Menggunakan Weighted Average FPS dari seluruh entri stts agar presisi & akurat.
     """
     fps = None
     width = None
     height = None
     
     try:
+        # Pindaian ditingkatkan ke 512KB agar aman untuk file bitrate tinggi (>30MB)
         req = urllib.request.Request(video_url, headers={
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-            'Range': 'bytes=0-262144'
+            'Range': 'bytes=0-524288'
         })
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = resp.read()
@@ -23,12 +24,12 @@ def get_real_mp4_meta(video_url):
         if b'stts' not in data:
             req_end = urllib.request.Request(video_url, headers={
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-                'Range': 'bytes=-262144'
+                'Range': 'bytes=-524288'
             })
             with urllib.request.urlopen(req_end, timeout=5) as resp_end:
                 data += resp_end.read()
 
-        # Lock khusus ke Handler Video Track ('vide') agar tidak salah baca track audio
+        # Lock khusus ke Video Track ('vide')
         vide_idx = data.find(b'vide')
         
         if vide_idx != -1:
@@ -44,26 +45,29 @@ def get_real_mp4_meta(video_url):
             timescale = int.from_bytes(data[timescale_offset:timescale_offset + 4], 'big')
             
             entry_count = int.from_bytes(data[stts_idx + 12:stts_idx + 16], 'big')
-            fps_counts = {}
             
-            for i in range(min(entry_count, 150)):
+            total_frames = 0
+            total_duration_units = 0
+            
+            # Hitung total frame & total durasi riil dari seluruh entri stts
+            for i in range(min(entry_count, 300)):
                 off = stts_idx + 16 + (i * 8)
                 if off + 8 > len(data):
                     break
                 s_count = int.from_bytes(data[off:off + 4], 'big')
                 s_delta = int.from_bytes(data[off + 4:off + 8], 'big')
                 
-                if s_delta > 0 and timescale > 0:
-                    calc_fps = round(timescale / s_delta)
-                    # Mendukung rentang FPS video wajar (15 FPS hingga 240 FPS)
-                    if 15 <= calc_fps <= 240:
-                        fps_counts[calc_fps] = fps_counts.get(calc_fps, 0) + s_count
+                if s_delta > 0:
+                    total_frames += s_count
+                    total_duration_units += (s_count * s_delta)
             
-            if fps_counts:
-                # Ambil FPS yang punya jumlah frame terbanyak (Modus riil)
-                fps = max(fps_counts.items(), key=lambda x: x[1])[0]
+            # Weighted Average FPS
+            if total_duration_units > 0 and timescale > 0:
+                calc_fps = round((total_frames * timescale) / total_duration_units)
+                if 15 <= calc_fps <= 240:
+                    fps = calc_fps
 
-        # Ambil Resolusi Presisi dari 'tkhd' milik Video Track
+        # Ambil Resolusi dari 'tkhd' milik Video Track
         tkhd_idx = data.rfind(b'tkhd', 0, vide_idx) if vide_idx != -1 else data.find(b'tkhd')
         if tkhd_idx == -1:
             tkhd_idx = data.find(b'tkhd')
@@ -296,4 +300,4 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(json.dumps(data).encode('utf-8'))
-        
+                    
