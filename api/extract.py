@@ -4,42 +4,41 @@ import os
 import time
 import urllib.request
 import urllib.parse
+from pymongo import MongoClient
 
 # ==============================================================================
-# 1. INISIALISASI FIREBASE SECARA AMAN + TES KIRIM DATA
+# 1. INISIALISASI MONGODB
 # ==============================================================================
+MONGO_URI = os.environ.get("MONGO_URI")
+
 db = None
-try:
-    import firebase_admin
-    from firebase_admin import credentials, firestore
+history_collection = None
 
-    if not firebase_admin._apps:
-        service_account_raw = os.environ.get("FIREBASE_SERVICE_ACCOUNT")
-        if service_account_raw:
-            service_account_info = json.loads(service_account_raw)
-            
-            # Auto-fix karakter newline '\\n' dari Environment Variable Vercel
-            if "private_key" in service_account_info:
-                service_account_info["private_key"] = service_account_info["private_key"].replace("\\n", "\n")
-                
-            cred = credentials.Certificate(service_account_info)
-            firebase_admin.initialize_app(cred)
-            db = firestore.client()
-            print("Firebase Firestore berhasil terhubung!")
+if MONGO_URI:
+    try:
+        # serverSelectionTimeoutMS=5000 biar Vercel gak hanging kalau URI salah/network bermasalah
+        client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+        db = client["parsgus_database"]
+        history_collection = db["riwayat_analisis"]
+        print("MongoDB berhasil terhubung!")
+    except Exception as e:
+        print(f"Gagal terhubung ke MongoDB: {e}")
 
-            # --- KODE TES KIRIM DATA ---
-            try:
-                db.collection("tes_koneksi").document("ping").set({
-                    "status": "Berhasil!",
-                    "pesan": "Database Firebase sudah terhubung penuh ke Vercel"
-                })
-                print("Tes kirim data ping berhasil!")
-            except Exception as ping_err:
-                print(f"Gagal kirim data ping ke Firestore: {ping_err}")
 
-except Exception as e:
-    print(f"Warning: Firebase error/tidak aktif, jalan tanpa DB: {e}")
-    db = None
+# --- FUNGSI HELPER MONGODB ---
+def simpan_data(nama, pesan):
+    if db is None:
+        return "Database tidak terhubung"
+    users_collection = db["users"]
+    data = {"nama": nama, "pesan": pesan}
+    result = users_collection.insert_one(data)
+    return f"Data berhasil disimpan dengan ID: {result.inserted_id}"
+
+def ambil_semua_data():
+    if db is None:
+        return []
+    users_collection = db["users"]
+    return list(users_collection.find({}, {"_id": 0}))
 
 
 # ==============================================================================
@@ -464,19 +463,20 @@ class handler(BaseHTTPRequestHandler):
                 'ext': 'MP4'
             }
 
-            # --- SIMPAN OTOMATIS KE FIREBASE FIRESTORE ---
-            if db:
+            # --- OTOMATIS SIMPAN RIWAYAT ANALISIS KE MONGODB ---
+            if history_collection is not None:
                 try:
-                    db.collection('riwayat_analisis').add({
+                    history_collection.insert_one({
                         'url_input': url,
                         'uploader': result['uploader'],
                         'username': result['username'],
                         'resolusi': f"{result['width']}x{result['height']}",
                         'fps': result['fps'],
+                        'bitrate': result['bitrate'],
                         'created_at': int(time.time())
                     })
-                except Exception as db_err:
-                    print(f"Gagal simpan data ke Firestore: {db_err}")
+                except Exception as mongo_err:
+                    print(f"Gagal simpan riwayat ke MongoDB: {mongo_err}")
 
             self._send_json(result, 200)
 
@@ -489,4 +489,4 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(json.dumps(data).encode('utf-8'))
-                                             
+    
