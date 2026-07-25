@@ -11,34 +11,19 @@ from pymongo import MongoClient
 # ==============================================================================
 MONGO_URI = os.environ.get("MONGO_URI")
 
+client = None
 db = None
-history_collection = None
 
 if MONGO_URI:
     try:
-        # serverSelectionTimeoutMS=5000 biar Vercel gak hanging kalau URI salah/network bermasalah
+        # Tambahkan timeout 5000ms (5 detik) agar tidak menggantung jika gagal
         client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
-        db = client["parsgus_database"]
-        history_collection = db["riwayat_analisis"]
-        print("MongoDB berhasil terhubung!")
+        db = client["db_utama"]
+        print("MongoDB berhasil dikoneksikan!")
     except Exception as e:
-        print(f"Gagal terhubung ke MongoDB: {e}")
-
-
-# --- FUNGSI HELPER MONGODB ---
-def simpan_data(nama, pesan):
-    if db is None:
-        return "Database tidak terhubung"
-    users_collection = db["users"]
-    data = {"nama": nama, "pesan": pesan}
-    result = users_collection.insert_one(data)
-    return f"Data berhasil disimpan dengan ID: {result.inserted_id}"
-
-def ambil_semua_data():
-    if db is None:
-        return []
-    users_collection = db["users"]
-    return list(users_collection.find({}, {"_id": 0}))
+        print(f"Gagal konek ke MongoDB: {e}")
+else:
+    print("Variabel MONGO_URI tidak ditemukan di Vercel!")
 
 
 # ==============================================================================
@@ -127,7 +112,6 @@ def get_real_mp4_meta(video_url):
                 if handler_type != b'vide':
                     continue
 
-                # 1. Timescale dari Video Track
                 mdhd = find_sub_box(mdia, b'mdhd')
                 timescale = None
                 if mdhd and len(mdhd) >= 16:
@@ -137,7 +121,6 @@ def get_real_mp4_meta(video_url):
                     elif version == 0:
                         timescale = int.from_bytes(mdhd[12:16], 'big')
 
-                # 2. Resolusi Presisi (2K / 4K / 8K)
                 tkhd = find_sub_box(trak, b'tkhd')
                 if tkhd and len(tkhd) >= 84:
                     version = tkhd[0]
@@ -153,7 +136,6 @@ def get_real_mp4_meta(video_url):
                     if w and h and 100 <= w <= 8192 and 100 <= h <= 8192:
                         width, height = w, h
 
-                # 3. FPS Murni
                 minf = find_sub_box(mdia, b'minf')
                 stbl = find_sub_box(minf, b'stbl') if minf else None
                 stts = find_sub_box(stbl, b'stts') if stbl else None
@@ -463,10 +445,10 @@ class handler(BaseHTTPRequestHandler):
                 'ext': 'MP4'
             }
 
-            # --- OTOMATIS SIMPAN RIWAYAT ANALISIS KE MONGODB ---
-            if history_collection is not None:
+            # SIMPAN OOTOMATIS KE MONGODB "db_utama" -> "riwayat_analisis"
+            if db is not None:
                 try:
-                    history_collection.insert_one({
+                    db["riwayat_analisis"].insert_one({
                         'url_input': url,
                         'uploader': result['uploader'],
                         'username': result['username'],
@@ -476,7 +458,7 @@ class handler(BaseHTTPRequestHandler):
                         'created_at': int(time.time())
                     })
                 except Exception as mongo_err:
-                    print(f"Gagal simpan riwayat ke MongoDB: {mongo_err}")
+                    print(f"Gagal menyimpan ke MongoDB: {mongo_err}")
 
             self._send_json(result, 200)
 
@@ -489,4 +471,4 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(json.dumps(data).encode('utf-8'))
-    
+        
