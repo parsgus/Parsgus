@@ -6,14 +6,14 @@ import urllib.parse
 def get_real_mp4_meta(video_url):
     """
     Membaca atom MP4 (stts, mdhd, tkhd) khusus untuk Video Track ('vide').
-    Menggunakan Weighted Average FPS dari seluruh entri stts agar presisi & akurat.
+    Menggunakan Time-Weighted Mode (Durasi Tayang Terlama) agar tahan terhadap dummy/patcher frame.
     """
     fps = None
     width = None
     height = None
     
     try:
-        # Pindaian ditingkatkan ke 512KB agar aman untuk file bitrate tinggi (>30MB)
+        # Pindaian 512KB aman untuk header video bitrate tinggi
         req = urllib.request.Request(video_url, headers={
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
             'Range': 'bytes=0-524288'
@@ -29,7 +29,7 @@ def get_real_mp4_meta(video_url):
             with urllib.request.urlopen(req_end, timeout=5) as resp_end:
                 data += resp_end.read()
 
-        # Lock khusus ke Video Track ('vide')
+        # Kunci lokasi khusus ke Video Track ('vide')
         vide_idx = data.find(b'vide')
         
         if vide_idx != -1:
@@ -46,26 +46,27 @@ def get_real_mp4_meta(video_url):
             
             entry_count = int.from_bytes(data[stts_idx + 12:stts_idx + 16], 'big')
             
-            total_frames = 0
-            total_duration_units = 0
+            # Map untuk menyimpan TOTAL DURASI TAYANG di layar per nilai FPS
+            fps_duration_map = {}
             
-            # Hitung total frame & total durasi riil dari seluruh entri stts
-            for i in range(min(entry_count, 300)):
+            for i in range(min(entry_count, 500)):
                 off = stts_idx + 16 + (i * 8)
                 if off + 8 > len(data):
                     break
                 s_count = int.from_bytes(data[off:off + 4], 'big')
                 s_delta = int.from_bytes(data[off + 4:off + 8], 'big')
                 
-                if s_delta > 0:
-                    total_frames += s_count
-                    total_duration_units += (s_count * s_delta)
+                if s_delta > 0 and timescale > 0:
+                    calc_fps = round(timescale / s_delta)
+                    duration_units = s_count * s_delta  # Total waktu tayang entri ini
+                    
+                    # Filter FPS wajar (15 hingga 240 FPS)
+                    if 15 <= calc_fps <= 240:
+                        fps_duration_map[calc_fps] = fps_duration_map.get(calc_fps, 0) + duration_units
             
-            # Weighted Average FPS
-            if total_duration_units > 0 and timescale > 0:
-                calc_fps = round((total_frames * timescale) / total_duration_units)
-                if 15 <= calc_fps <= 240:
-                    fps = calc_fps
+            # Ambil FPS yang punya DURASI TAYANG TERLAMA di layar
+            if fps_duration_map:
+                fps = max(fps_duration_map.items(), key=lambda x: x[1])[0]
 
         # Ambil Resolusi dari 'tkhd' milik Video Track
         tkhd_idx = data.rfind(b'tkhd', 0, vide_idx) if vide_idx != -1 else data.find(b'tkhd')
@@ -300,4 +301,4 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(json.dumps(data).encode('utf-8'))
-                    
+                
