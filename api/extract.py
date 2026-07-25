@@ -6,7 +6,7 @@ import urllib.request
 import urllib.parse
 
 # ==============================================================================
-# 1. INISIALISASI FIREBASE SECARA AMAN (BEBAS CRASH 500 VERCEL)
+# 1. INISIALISASI FIREBASE SECARA AMAN + TES KIRIM DATA
 # ==============================================================================
 db = None
 try:
@@ -26,6 +26,17 @@ try:
             firebase_admin.initialize_app(cred)
             db = firestore.client()
             print("Firebase Firestore berhasil terhubung!")
+
+            # --- KODE TES KIRIM DATA ---
+            try:
+                db.collection("tes_koneksi").document("ping").set({
+                    "status": "Berhasil!",
+                    "pesan": "Database Firebase sudah terhubung penuh ke Vercel"
+                })
+                print("Tes kirim data ping berhasil!")
+            except Exception as ping_err:
+                print(f"Gagal kirim data ping ke Firestore: {ping_err}")
+
 except Exception as e:
     print(f"Warning: Firebase error/tidak aktif, jalan tanpa DB: {e}")
     db = None
@@ -478,4 +489,4 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(json.dumps(data).encode('utf-8'))
-        
+                                             
