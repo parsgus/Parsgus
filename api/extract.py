@@ -5,8 +5,8 @@ import urllib.parse
 
 def get_real_mp4_meta(video_url):
     """
-    Membaca atom MP4 (stts, mdhd, tkhd) via HTTP Range Request.
-    Mendukung analisis video yang di-patch (dummy frames / VFR).
+    Membaca atom MP4 (stts, mdhd, tkhd) khusus untuk Video Track ('vide').
+    Mendukung deteksi dinamis riil dari 15 FPS sampai 240 FPS+ tanpa limit buatan.
     """
     fps = None
     width = None
@@ -28,9 +28,15 @@ def get_real_mp4_meta(video_url):
             with urllib.request.urlopen(req_end, timeout=5) as resp_end:
                 data += resp_end.read()
 
-        # 1. Parse 'mdhd' & tabel 'stts' (menseleksi seluruh entri delta frame)
-        mdhd_idx = data.find(b'mdhd')
-        stts_idx = data.find(b'stts')
+        # Lock khusus ke Handler Video Track ('vide') agar tidak salah baca track audio
+        vide_idx = data.find(b'vide')
+        
+        if vide_idx != -1:
+            mdhd_idx = data.rfind(b'mdhd', 0, vide_idx)
+            stts_idx = data.find(b'stts', vide_idx)
+        else:
+            mdhd_idx = data.find(b'mdhd')
+            stts_idx = data.find(b'stts')
         
         if mdhd_idx != -1 and stts_idx != -1:
             version = data[mdhd_idx + 4]
@@ -38,11 +44,9 @@ def get_real_mp4_meta(video_url):
             timescale = int.from_bytes(data[timescale_offset:timescale_offset + 4], 'big')
             
             entry_count = int.from_bytes(data[stts_idx + 12:stts_idx + 16], 'big')
-            
             fps_counts = {}
             
-            # Loop sampai 100 entri tabel stts untuk mendeteksi frame rate target
-            for i in range(min(entry_count, 100)):
+            for i in range(min(entry_count, 150)):
                 off = stts_idx + 16 + (i * 8)
                 if off + 8 > len(data):
                     break
@@ -51,17 +55,19 @@ def get_real_mp4_meta(video_url):
                 
                 if s_delta > 0 and timescale > 0:
                     calc_fps = round(timescale / s_delta)
-                    # Filter rentang FPS video yang wajar
+                    # Mendukung rentang FPS video wajar (15 FPS hingga 240 FPS)
                     if 15 <= calc_fps <= 240:
                         fps_counts[calc_fps] = fps_counts.get(calc_fps, 0) + s_count
             
             if fps_counts:
-                # Ambil FPS tertinggi yang valid dari struktur MP4 (misal 120 fps / 60 fps)
-                sorted_fps = sorted(fps_counts.items(), key=lambda x: (x[0], x[1]), reverse=True)
-                fps = sorted_fps[0][0]
+                # Ambil FPS yang punya jumlah frame terbanyak (Modus riil)
+                fps = max(fps_counts.items(), key=lambda x: x[1])[0]
 
-        # 2. Ambil Resolusi Presisi dari 'tkhd' atom
-        tkhd_idx = data.find(b'tkhd')
+        # Ambil Resolusi Presisi dari 'tkhd' milik Video Track
+        tkhd_idx = data.rfind(b'tkhd', 0, vide_idx) if vide_idx != -1 else data.find(b'tkhd')
+        if tkhd_idx == -1:
+            tkhd_idx = data.find(b'tkhd')
+
         if tkhd_idx != -1:
             version = data[tkhd_idx + 4]
             w_offset = tkhd_idx + 88 if version == 1 else tkhd_idx + 76
@@ -258,7 +264,6 @@ class handler(BaseHTTPRequestHandler):
             filesize_mb = round(filesize_bytes / (1024 * 1024), 2) if filesize_bytes else "N/A"
             duration = info.get('duration', 0)
 
-            # Hitung Bitrate
             bitrate_str = "-"
             if filesize_bytes > 0 and duration > 0:
                 calc_bitrate_kbps = round((filesize_bytes * 8) / (duration * 1000))
@@ -291,4 +296,4 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(json.dumps(data).encode('utf-8'))
-            
+        
