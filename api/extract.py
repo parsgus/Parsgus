@@ -4,26 +4,48 @@ import os
 import time
 import urllib.request
 import urllib.parse
-from pymongo import MongoClient
 
 # ==============================================================================
-# 1. INISIALISASI MONGODB
+# 1. INISIALISASI MONGODB SECARA AMAN (FAIL-SAFE & LAZY LOADING)
 # ==============================================================================
-MONGO_URI = os.environ.get("MONGO_URI")
+HAS_PYMONGO = False
+try:
+    from pymongo import MongoClient
+    HAS_PYMONGO = True
+except Exception:
+    HAS_PYMONGO = False
 
-client = None
-db = None
+_mongo_client = None
 
-if MONGO_URI:
+def get_db():
+    """Mengambil instance database MongoDB secara aman tanpa bikin serverless crash."""
+    global _mongo_client
+    if not HAS_PYMONGO:
+        return None
+
+    # Mengambil URI dari berbagai kemungkinan variabel yang dibuat Vercel
+    mongo_uri = (
+        os.environ.get("MONGODB_URI") or 
+        os.environ.get("STORAGE_URL") or 
+        os.environ.get("MONGO_URI")
+    )
+
+    if not mongo_uri:
+        return None
+
+    if _mongo_client is None:
+        try:
+            # Timeout 3 detik agar tidak menggantung lama
+            _mongo_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=3000)
+        except Exception as e:
+            print(f"Gagal inisialisasi MongoClient: {e}")
+            return None
+
     try:
-        # Tambahkan timeout 5000ms (5 detik) agar tidak menggantung jika gagal
-        client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
-        db = client["db_utama"]
-        print("MongoDB berhasil dikoneksikan!")
+        return _mongo_client["db_utama"]
     except Exception as e:
-        print(f"Gagal konek ke MongoDB: {e}")
-else:
-    print("Variabel MONGO_URI tidak ditemukan di Vercel!")
+        print(f"Gagal akses database: {e}")
+        return None
 
 
 # ==============================================================================
@@ -366,16 +388,19 @@ HTML_UI = """<!DOCTYPE html>
 # ==============================================================================
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200)
-        self.send_header('Content-Type', 'text/html; charset=utf-8')
-        self.end_headers()
-        self.wfile.write(HTML_UI.encode('utf-8'))
+        try:
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(HTML_UI.encode('utf-8'))
+        except Exception as e:
+            self._send_json({'error': f"GET Handler Error: {str(e)}"}, 500)
 
     def do_POST(self):
-        content_length = int(self.headers.get('Content-Length', 0))
-        post_data = self.rfile.read(content_length)
-        
         try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            
             data = json.loads(post_data.decode('utf-8'))
             url = data.get('url', '').strip()
 
@@ -445,7 +470,8 @@ class handler(BaseHTTPRequestHandler):
                 'ext': 'MP4'
             }
 
-            # SIMPAN OOTOMATIS KE MONGODB "db_utama" -> "riwayat_analisis"
+            # --- SIMPAN KE MONGODB SECARA AMAN (TIDAK MEMBLOKIR RESPONS KLIEN) ---
+            db = get_db()
             if db is not None:
                 try:
                     db["riwayat_analisis"].insert_one({
@@ -458,7 +484,7 @@ class handler(BaseHTTPRequestHandler):
                         'created_at': int(time.time())
                     })
                 except Exception as mongo_err:
-                    print(f"Gagal menyimpan ke MongoDB: {mongo_err}")
+                    print(f"Gagal simpan ke MongoDB: {mongo_err}")
 
             self._send_json(result, 200)
 
@@ -471,4 +497,4 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(json.dumps(data).encode('utf-8'))
-        
+    
