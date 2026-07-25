@@ -6,7 +6,7 @@ import urllib.parse
 def get_real_mp4_meta(video_url):
     """
     Membaca atom MP4 (stts, mdhd, tkhd) via HTTP Range Request.
-    Mencari FPS dominan (paling banyak dipakai) agar akurat di semua jenis video.
+    Mendukung analisis video yang di-patch (dummy frames / VFR).
     """
     fps = None
     width = None
@@ -28,7 +28,7 @@ def get_real_mp4_meta(video_url):
             with urllib.request.urlopen(req_end, timeout=5) as resp_end:
                 data += resp_end.read()
 
-        # 1. Hitung FPS Dominan dari tabel 'stts'
+        # 1. Parse 'mdhd' & tabel 'stts' (menseleksi seluruh entri delta frame)
         mdhd_idx = data.find(b'mdhd')
         stts_idx = data.find(b'stts')
         
@@ -38,8 +38,10 @@ def get_real_mp4_meta(video_url):
             timescale = int.from_bytes(data[timescale_offset:timescale_offset + 4], 'big')
             
             entry_count = int.from_bytes(data[stts_idx + 12:stts_idx + 16], 'big')
+            
             fps_counts = {}
             
+            # Loop sampai 100 entri tabel stts untuk mendeteksi frame rate target
             for i in range(min(entry_count, 100)):
                 off = stts_idx + 16 + (i * 8)
                 if off + 8 > len(data):
@@ -49,12 +51,14 @@ def get_real_mp4_meta(video_url):
                 
                 if s_delta > 0 and timescale > 0:
                     calc_fps = round(timescale / s_delta)
-                    if 10 <= calc_fps <= 240:
+                    # Filter rentang FPS video yang wajar
+                    if 15 <= calc_fps <= 240:
                         fps_counts[calc_fps] = fps_counts.get(calc_fps, 0) + s_count
             
-            # Ambil FPS dengan jumlah frame TERBANYAK (Modus) agar akurat
             if fps_counts:
-                fps = max(fps_counts.items(), key=lambda x: x[1])[0]
+                # Ambil FPS tertinggi yang valid dari struktur MP4 (misal 120 fps / 60 fps)
+                sorted_fps = sorted(fps_counts.items(), key=lambda x: (x[0], x[1]), reverse=True)
+                fps = sorted_fps[0][0]
 
         # 2. Ambil Resolusi Presisi dari 'tkhd' atom
         tkhd_idx = data.find(b'tkhd')
@@ -254,6 +258,7 @@ class handler(BaseHTTPRequestHandler):
             filesize_mb = round(filesize_bytes / (1024 * 1024), 2) if filesize_bytes else "N/A"
             duration = info.get('duration', 0)
 
+            # Hitung Bitrate
             bitrate_str = "-"
             if filesize_bytes > 0 and duration > 0:
                 calc_bitrate_kbps = round((filesize_bytes * 8) / (duration * 1000))
@@ -286,4 +291,4 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(json.dumps(data).encode('utf-8'))
-                    
+            
