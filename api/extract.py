@@ -3,17 +3,49 @@ import json
 import urllib.request
 import urllib.parse
 
+def parse_box_header(data, offset):
+    if offset + 8 > len(data):
+        return None, 0, 0
+    size = int.from_bytes(data[offset:offset+4], 'big')
+    btype = data[offset+4:offset+8]
+    if size == 1:
+        if offset + 16 > len(data):
+            return None, 0, 0
+        size = int.from_bytes(data[offset+8:offset+16], 'big')
+        hlen = 16
+    else:
+        hlen = 8
+    return btype, size, hlen
+
+def find_sub_box(data, target_type):
+    offset = 0
+    while offset + 8 <= len(data):
+        btype, size, hlen = parse_box_header(data, offset)
+        if not btype or size < hlen or offset + size > len(data):
+            break
+        if btype == target_type:
+            return data[offset + hlen : offset + size]
+        offset += size
+    return None
+
+def find_all_sub_boxes(data, target_type):
+    boxes = []
+    offset = 0
+    while offset + 8 <= len(data):
+        btype, size, hlen = parse_box_header(data, offset)
+        if not btype or size < hlen or offset + size > len(data):
+            break
+        if btype == target_type:
+            boxes.append(data[offset + hlen : offset + size])
+        offset += size
+    return boxes
+
 def get_real_mp4_meta(video_url):
-    """
-    Membaca atom MP4 (stts, mdhd, tkhd) khusus untuk Video Track ('vide').
-    Menggunakan Time-Weighted Mode (Durasi Tayang Terlama) agar tahan terhadap dummy/patcher frame.
-    """
     fps = None
     width = None
     height = None
     
     try:
-        # Pindaian 512KB aman untuk header video bitrate tinggi
         req = urllib.request.Request(video_url, headers={
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
             'Range': 'bytes=0-524288'
@@ -21,7 +53,7 @@ def get_real_mp4_meta(video_url):
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = resp.read()
 
-        if b'stts' not in data:
+        if b'moov' not in data:
             req_end = urllib.request.Request(video_url, headers={
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
                 'Range': 'bytes=-524288'
@@ -29,62 +61,86 @@ def get_real_mp4_meta(video_url):
             with urllib.request.urlopen(req_end, timeout=5) as resp_end:
                 data += resp_end.read()
 
-        # Kunci lokasi khusus ke Video Track ('vide')
-        vide_idx = data.find(b'vide')
-        
-        if vide_idx != -1:
-            mdhd_idx = data.rfind(b'mdhd', 0, vide_idx)
-            stts_idx = data.find(b'stts', vide_idx)
-        else:
-            mdhd_idx = data.find(b'mdhd')
-            stts_idx = data.find(b'stts')
-        
-        if mdhd_idx != -1 and stts_idx != -1:
-            version = data[mdhd_idx + 4]
-            timescale_offset = mdhd_idx + 24 if version == 1 else mdhd_idx + 16
-            timescale = int.from_bytes(data[timescale_offset:timescale_offset + 4], 'big')
+        moov_idx = data.find(b'moov')
+        if moov_idx != -1:
+            moov_box_start = max(0, moov_idx - 4)
+            moov_size = int.from_bytes(data[moov_box_start:moov_box_start+4], 'big')
             
-            entry_count = int.from_bytes(data[stts_idx + 12:stts_idx + 16], 'big')
-            
-            # Map untuk menyimpan TOTAL DURASI TAYANG di layar per nilai FPS
-            fps_duration_map = {}
-            
-            for i in range(min(entry_count, 500)):
-                off = stts_idx + 16 + (i * 8)
-                if off + 8 > len(data):
-                    break
-                s_count = int.from_bytes(data[off:off + 4], 'big')
-                s_delta = int.from_bytes(data[off + 4:off + 8], 'big')
+            if moov_size < 8 or moov_box_start + moov_size > len(data):
+                moov_data = data[moov_idx + 4:]
+            else:
+                moov_data = data[moov_idx + 4 : moov_box_start + moov_size]
+
+            # Cari semua box track ('trak') di dalam 'moov'
+            traks = find_all_sub_boxes(moov_data, b'trak')
+
+            for trak in traks:
+                mdia = find_sub_box(trak, b'mdia')
+                if not mdia:
+                    continue
                 
-                if s_delta > 0 and timescale > 0:
-                    calc_fps = round(timescale / s_delta)
-                    duration_units = s_count * s_delta  # Total waktu tayang entri ini
+                hdlr = find_sub_box(mdia, b'hdlr')
+                if not hdlr or len(hdlr) < 12:
+                    continue
+                
+                # KUNCI UTAMA: Filter khusus Video Track ('vide')
+                handler_type = hdlr[8:12]
+                if handler_type != b'vide':
+                    continue
+
+                # 1. Ambil Timescale dari Video Track
+                mdhd = find_sub_box(mdia, b'mdhd')
+                timescale = None
+                if mdhd and len(mdhd) >= 16:
+                    version = mdhd[0]
+                    if version == 1 and len(mdhd) >= 20:
+                        timescale = int.from_bytes(mdhd[16:20], 'big')
+                    elif version == 0:
+                        timescale = int.from_bytes(mdhd[12:16], 'big')
+
+                # 2. Ambil Resolusi dari tkhd Video Track
+                tkhd = find_sub_box(trak, b'tkhd')
+                if tkhd and len(tkhd) >= 76:
+                    version = tkhd[0]
+                    if version == 1 and len(tkhd) >= 88:
+                        w = int.from_bytes(tkhd[80:84], 'big') >> 16
+                        h = int.from_bytes(tkhd[84:88], 'big') >> 16
+                    elif version == 0:
+                        w = int.from_bytes(tkhd[68:72], 'big') >> 16
+                        h = int.from_bytes(tkhd[72:76], 'big') >> 16
+                    else:
+                        w, h = None, None
                     
-                    # Filter FPS wajar (15 hingga 240 FPS)
-                    if 15 <= calc_fps <= 240:
-                        fps_duration_map[calc_fps] = fps_duration_map.get(calc_fps, 0) + duration_units
-            
-            # Ambil FPS yang punya DURASI TAYANG TERLAMA di layar
-            if fps_duration_map:
-                fps = max(fps_duration_map.items(), key=lambda x: x[1])[0]
+                    if w and h and 100 <= w <= 4096 and 100 <= h <= 4096:
+                        width, height = w, h
 
-        # Ambil Resolusi dari 'tkhd' milik Video Track
-        tkhd_idx = data.rfind(b'tkhd', 0, vide_idx) if vide_idx != -1 else data.find(b'tkhd')
-        if tkhd_idx == -1:
-            tkhd_idx = data.find(b'tkhd')
+                # 3. Ambil FPS dari stts Video Track
+                minf = find_sub_box(mdia, b'minf')
+                stbl = find_sub_box(minf, b'stbl') if minf else None
+                stts = find_sub_box(stbl, b'stts') if stbl else None
 
-        if tkhd_idx != -1:
-            version = data[tkhd_idx + 4]
-            w_offset = tkhd_idx + 88 if version == 1 else tkhd_idx + 76
-            h_offset = tkhd_idx + 92 if version == 1 else tkhd_idx + 80
-            
-            if h_offset + 4 <= len(data):
-                w = int.from_bytes(data[w_offset:w_offset + 4], 'big') >> 16
-                h = int.from_bytes(data[h_offset:h_offset + 4], 'big') >> 16
-                
-                if 100 <= w <= 4096 and 100 <= h <= 4096:
-                    width = w
-                    height = h
+                if stts and len(stts) >= 8 and timescale and timescale > 0:
+                    entry_count = int.from_bytes(stts[4:8], 'big')
+                    fps_counts = {}
+                    off = 8
+
+                    for _ in range(min(entry_count, 1000)):
+                        if off + 8 > len(stts):
+                            break
+                        s_count = int.from_bytes(stts[off:off+4], 'big')
+                        s_delta = int.from_bytes(stts[off+4:off+8], 'big')
+                        off += 8
+
+                        if s_delta > 0:
+                            calc_fps = round(timescale / s_delta)
+                            if 15 <= calc_fps <= 240:
+                                fps_counts[calc_fps] = fps_counts.get(calc_fps, 0) + s_count
+
+                    if fps_counts:
+                        fps = max(fps_counts.items(), key=lambda x: x[1])[0]
+
+                # Setelah video track selesai diproses, hentikan loop
+                break
 
     except Exception:
         pass
@@ -301,4 +357,4 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(json.dumps(data).encode('utf-8'))
-                
+                        
