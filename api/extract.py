@@ -1,7 +1,28 @@
 from http.server import BaseHTTPRequestHandler
 import json
+import os
+import time
 import urllib.request
 import urllib.parse
+
+# --- INI SCRIPT INISIALISASI FIREBASE ---
+import firebase_admin
+from firebase_admin import credentials, firestore
+
+db = None
+try:
+    if not firebase_admin._apps:
+        json_env = os.environ.get("FIREBASE_SERVICE_ACCOUNT")
+        if json_env:
+            service_account_info = json.loads(json_env)
+            cred = credentials.Certificate(service_account_info)
+            firebase_admin.initialize_app(cred)
+    
+    # Konek ke Firestore
+    db = firestore.client()
+except Exception as e:
+    print(f"Firebase init error: {e}")
+
 
 def parse_box_header(data, offset):
     if offset + 8 > len(data):
@@ -86,7 +107,6 @@ def get_real_mp4_meta(video_url):
                 if handler_type != b'vide':
                     continue
 
-                # 1. Ambil Timescale dari Video Track
                 mdhd = find_sub_box(mdia, b'mdhd')
                 timescale = None
                 if mdhd and len(mdhd) >= 16:
@@ -96,7 +116,6 @@ def get_real_mp4_meta(video_url):
                     elif version == 0:
                         timescale = int.from_bytes(mdhd[12:16], 'big')
 
-                # 2. Ambil Resolusi (Width & Height) Presisi (Mendukung hingga 2K / 4K / 8K)
                 tkhd = find_sub_box(trak, b'tkhd')
                 if tkhd and len(tkhd) >= 84:
                     version = tkhd[0]
@@ -112,7 +131,6 @@ def get_real_mp4_meta(video_url):
                     if w and h and 100 <= w <= 8192 and 100 <= h <= 8192:
                         width, height = w, h
 
-                # 3. Ambil FPS dari stts Video Track
                 minf = find_sub_box(mdia, b'minf')
                 stbl = find_sub_box(minf, b'stbl') if minf else None
                 stts = find_sub_box(stbl, b'stts') if stbl else None
@@ -417,6 +435,20 @@ class handler(BaseHTTPRequestHandler):
                 'ext': 'MP4'
             }
 
+            # --- CONTOH SIMPAN OTOMATIS KE FIREBASE FIRESTORE ---
+            if db:
+                try:
+                    db.collection('riwayat_analisis').add({
+                        'url_input': url,
+                        'uploader': result['uploader'],
+                        'username': result['username'],
+                        'resolusi': f"{result['width']}x{result['height']}",
+                        'fps': result['fps'],
+                        'created_at': int(time.time())
+                    })
+                except Exception as db_err:
+                    print(f"Gagal simpan data ke Firestore: {db_err}")
+
             self._send_json(result, 200)
 
         except Exception as e:
@@ -428,4 +460,4 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(json.dumps(data).encode('utf-8'))
-                        
+                
