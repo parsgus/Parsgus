@@ -86,6 +86,7 @@ def get_real_mp4_meta(video_url):
                 if handler_type != b'vide':
                     continue
 
+                # 1. Ambil Timescale dari Video Track
                 mdhd = find_sub_box(mdia, b'mdhd')
                 timescale = None
                 if mdhd and len(mdhd) >= 16:
@@ -95,21 +96,23 @@ def get_real_mp4_meta(video_url):
                     elif version == 0:
                         timescale = int.from_bytes(mdhd[12:16], 'big')
 
+                # 2. Ambil Resolusi (Width & Height) Presisi (Mendukung hingga 2K / 4K / 8K)
                 tkhd = find_sub_box(trak, b'tkhd')
-                if tkhd and len(tkhd) >= 76:
+                if tkhd and len(tkhd) >= 84:
                     version = tkhd[0]
-                    if version == 1 and len(tkhd) >= 88:
-                        w = int.from_bytes(tkhd[80:84], 'big') >> 16
-                        h = int.from_bytes(tkhd[84:88], 'big') >> 16
+                    if version == 1 and len(tkhd) >= 96:
+                        w = int.from_bytes(tkhd[88:92], 'big') >> 16
+                        h = int.from_bytes(tkhd[92:96], 'big') >> 16
                     elif version == 0:
-                        w = int.from_bytes(tkhd[68:72], 'big') >> 16
-                        h = int.from_bytes(tkhd[72:76], 'big') >> 16
+                        w = int.from_bytes(tkhd[76:80], 'big') >> 16
+                        h = int.from_bytes(tkhd[80:84], 'big') >> 16
                     else:
                         w, h = None, None
                     
-                    if w and h and 100 <= w <= 4096 and 100 <= h <= 4096:
+                    if w and h and 100 <= w <= 8192 and 100 <= h <= 8192:
                         width, height = w, h
 
+                # 3. Ambil FPS dari stts Video Track
                 minf = find_sub_box(mdia, b'minf')
                 stbl = find_sub_box(minf, b'stbl') if minf else None
                 stts = find_sub_box(stbl, b'stts') if stbl else None
@@ -142,7 +145,7 @@ def get_real_mp4_meta(video_url):
     return fps, width, height
 
 
-# HTML UI Frontend (Desain Baru + Links Sosial)
+# HTML UI Frontend
 HTML_UI = """<!DOCTYPE html>
 <html lang="id">
 <head>
@@ -384,9 +387,9 @@ class handler(BaseHTTPRequestHandler):
                     final_width = parsed_w
                     final_height = parsed_h
 
-            if not final_width or final_width < 100 or final_width > 4096:
+            if not final_width or final_width < 100 or final_width > 8192:
                 final_width = api_width if api_width > 0 else 1080
-            if not final_height or final_height < 100 or final_height > 4096:
+            if not final_height or final_height < 100 or final_height > 8192:
                 final_height = api_height if api_height > 0 else 1920
 
             filesize_bytes = info.get('hd_size', 0) or info.get('size', 0) or info.get('wm_size', 0)
@@ -425,4 +428,4 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(json.dumps(data).encode('utf-8'))
-                
+                        
