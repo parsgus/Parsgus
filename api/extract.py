@@ -5,25 +5,35 @@ import time
 import urllib.request
 import urllib.parse
 
-# --- INI SCRIPT INISIALISASI FIREBASE ---
-import firebase_admin
-from firebase_admin import credentials, firestore
-
+# ==============================================================================
+# 1. INISIALISASI FIREBASE SECARA AMAN (BEBAS CRASH 500 VERCEL)
+# ==============================================================================
 db = None
 try:
+    import firebase_admin
+    from firebase_admin import credentials, firestore
+
     if not firebase_admin._apps:
-        json_env = os.environ.get("FIREBASE_SERVICE_ACCOUNT")
-        if json_env:
-            service_account_info = json.loads(json_env)
+        service_account_raw = os.environ.get("FIREBASE_SERVICE_ACCOUNT")
+        if service_account_raw:
+            service_account_info = json.loads(service_account_raw)
+            
+            # Auto-fix karakter newline '\\n' dari Environment Variable Vercel
+            if "private_key" in service_account_info:
+                service_account_info["private_key"] = service_account_info["private_key"].replace("\\n", "\n")
+                
             cred = credentials.Certificate(service_account_info)
             firebase_admin.initialize_app(cred)
-    
-    # Konek ke Firestore
-    db = firestore.client()
+            db = firestore.client()
+            print("Firebase Firestore berhasil terhubung!")
 except Exception as e:
-    print(f"Firebase init error: {e}")
+    print(f"Warning: Firebase error/tidak aktif, jalan tanpa DB: {e}")
+    db = None
 
 
+# ==============================================================================
+# 2. MP4 HEADER PARSER (PRESISE FPS & RESOLUSI 2K/4K/8K)
+# ==============================================================================
 def parse_box_header(data, offset):
     if offset + 8 > len(data):
         return None, 0, 0
@@ -107,6 +117,7 @@ def get_real_mp4_meta(video_url):
                 if handler_type != b'vide':
                     continue
 
+                # 1. Timescale dari Video Track
                 mdhd = find_sub_box(mdia, b'mdhd')
                 timescale = None
                 if mdhd and len(mdhd) >= 16:
@@ -116,6 +127,7 @@ def get_real_mp4_meta(video_url):
                     elif version == 0:
                         timescale = int.from_bytes(mdhd[12:16], 'big')
 
+                # 2. Resolusi Presisi (2K / 4K / 8K)
                 tkhd = find_sub_box(trak, b'tkhd')
                 if tkhd and len(tkhd) >= 84:
                     version = tkhd[0]
@@ -131,6 +143,7 @@ def get_real_mp4_meta(video_url):
                     if w and h and 100 <= w <= 8192 and 100 <= h <= 8192:
                         width, height = w, h
 
+                # 3. FPS Murni
                 minf = find_sub_box(mdia, b'minf')
                 stbl = find_sub_box(minf, b'stbl') if minf else None
                 stts = find_sub_box(stbl, b'stts') if stbl else None
@@ -163,7 +176,9 @@ def get_real_mp4_meta(video_url):
     return fps, width, height
 
 
-# HTML UI Frontend
+# ==============================================================================
+# 3. FRONTEND HTML UI
+# ==============================================================================
 HTML_UI = """<!DOCTYPE html>
 <html lang="id">
 <head>
@@ -354,6 +369,9 @@ HTML_UI = """<!DOCTYPE html>
 </html>"""
 
 
+# ==============================================================================
+# 4. HANDLER VERCEL SERVERLESS
+# ==============================================================================
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -435,7 +453,7 @@ class handler(BaseHTTPRequestHandler):
                 'ext': 'MP4'
             }
 
-            # --- CONTOH SIMPAN OTOMATIS KE FIREBASE FIRESTORE ---
+            # --- SIMPAN OTOMATIS KE FIREBASE FIRESTORE ---
             if db:
                 try:
                     db.collection('riwayat_analisis').add({
@@ -460,4 +478,4 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(json.dumps(data).encode('utf-8'))
-                
+        
