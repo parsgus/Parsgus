@@ -3,13 +3,76 @@ import json
 import urllib.request
 import urllib.parse
 
-# Tampilan HTML Halaman Depan
+def get_real_mp4_meta(video_url):
+    """
+    Membaca atom MP4 (stts & mdhd & tkhd) via HTTP Range Request 
+    untuk menghitung FPS dan Resolusi presisi tanpa download seluruh video.
+    """
+    fps = None
+    width = None
+    height = None
+    
+    try:
+        # Minta 256KB pertama file MP4 untuk membaca moov header
+        req = urllib.request.Request(video_url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+            'Range': 'bytes=0-262144'
+        })
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = resp.read()
+
+        # Jika 'stts' tidak ada di awal, minta 256KB terakhir file (jika moov di akhir)
+        if b'stts' not in data:
+            req_end = urllib.request.Request(video_url, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+                'Range': 'bytes=-262144'
+            })
+            with urllib.request.urlopen(req_end, timeout=5) as resp_end:
+                data += resp_end.read()
+
+        # 1. Hitung Real FPS dari 'mdhd' dan 'stts' atom
+        mdhd_idx = data.find(b'mdhd')
+        stts_idx = data.find(b'stts')
+        
+        if mdhd_idx != -1 and stts_idx != -1:
+            version = data[mdhd_idx + 4]
+            # timescale offset tergantung versi mdhd
+            timescale_offset = mdhd_idx + 24 if version == 1 else mdhd_idx + 16
+            timescale = int.from_bytes(data[timescale_offset:timescale_offset + 4], 'big')
+            
+            sample_delta = int.from_bytes(data[stts_idx + 16:stts_idx + 20], 'big')
+            
+            if sample_delta > 0 and timescale > 0:
+                calc_fps = round(timescale / sample_delta)
+                if 10 <= calc_fps <= 240:  # Validasi range FPS wajar (10 - 240 FPS)
+                    fps = calc_fps
+
+        # 2. Ambil Resolusi Presisi dari 'tkhd' atom
+        tkhd_idx = data.find(b'tkhd')
+        if tkhd_idx != -1:
+            version = data[tkhd_idx + 4]
+            w_offset = tkhd_idx + 88 if version == 1 else tkhd_idx + 76
+            h_offset = tkhd_idx + 92 if version == 1 else tkhd_idx + 80
+            if h_offset + 2 <= len(data):
+                w = int.from_bytes(data[w_offset:w_offset + 2], 'big')
+                h = int.from_bytes(data[h_offset:h_offset + 2], 'big')
+                if w > 0 and h > 0:
+                    width = w
+                    height = h
+
+    except Exception:
+        pass
+
+    return fps, width, height
+
+
+# HTML UI Frontend
 HTML_UI = """<!DOCTYPE html>
 <html lang="id">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>parsgus — TikTok Metadata Analyzer</title>
+  <title>parsgus — TikTok Metadata & Stream Analyzer</title>
   <style>
     :root {
       --bg-color: #0b0f12;
@@ -56,7 +119,7 @@ HTML_UI = """<!DOCTYPE html>
         <button onclick="getMetadata()">Ambil Statistik</button>
       </div>
 
-      <div class="loading" id="loading">⚡ Mengambil data dari server...</div>
+      <div class="loading" id="loading">⚡ Menganalisis stream header video...</div>
 
       <div class="result" id="resultCard">
         <h3>Statistik Video</h3>
@@ -117,16 +180,15 @@ HTML_UI = """<!DOCTYPE html>
 </body>
 </html>"""
 
+
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        # Menampilkan tampilan UI HTML saat dibuka di browser
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.end_headers()
         self.wfile.write(HTML_UI.encode('utf-8'))
 
     def do_POST(self):
-        # Proses ekstraksi metadata video
         content_length = int(self.headers.get('Content-Length', 0))
         post_data = self.rfile.read(content_length)
         
@@ -153,16 +215,34 @@ class handler(BaseHTTPRequestHandler):
                 return
 
             info = res_data['data']
-            filesize_bytes = info.get('size', 0) or info.get('wm_size', 0)
+            
+            # Prioritaskan link HD jika tersedia
+            video_stream_url = info.get('hdplay') or info.get('play')
+            
+            # Nilai awal dari API
+            res_width = info.get('width', 0)
+            res_height = info.get('height', 0)
+            real_fps = 30  # default fallback jika header tidak terbaca
+
+            # Jalankan Inspeksi Header MP4
+            if video_stream_url:
+                parsed_fps, parsed_w, parsed_h = get_real_mp4_meta(video_stream_url)
+                if parsed_fps:
+                    real_fps = parsed_fps
+                if parsed_w and parsed_h:
+                    res_width = parsed_w
+                    res_height = parsed_h
+
+            filesize_bytes = info.get('hd_size', 0) or info.get('size', 0) or info.get('wm_size', 0)
             filesize_mb = round(filesize_bytes / (1024 * 1024), 2) if filesize_bytes else "N/A"
 
             result = {
                 'uploader': info.get('author', {}).get('nickname', '-'),
                 'username': info.get('author', {}).get('unique_id', '-'),
                 'title': info.get('title', '-'),
-                'width': info.get('width', 576),
-                'height': info.get('height', 576),
-                'fps': 30,
+                'width': res_width if res_width > 0 else 1080,
+                'height': res_height if res_height > 0 else 1920,
+                'fps': real_fps,
                 'duration': info.get('duration', 0),
                 'filesize_mb': filesize_mb,
                 'ext': 'MP4'
@@ -179,4 +259,4 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(json.dumps(data).encode('utf-8'))
-            
+      
