@@ -301,6 +301,7 @@ HTML_UI = """<!DOCTYPE html>
     .row span { color: var(--text-muted); }
     .row strong { color: var(--text-main); font-weight: 600; }
   </style>
+  <script defer src="https://cdn.vercel-insights.com/v1/script.js"></script>
 </head>
 <body>
   <header>
