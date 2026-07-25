@@ -4,6 +4,13 @@ import urllib.request
 import urllib.parse
 
 class handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        # Respons jika backend dibuka langsung via browser (GET)
+        self._send_json({
+            'status': 'online',
+            'message': 'API Parsgus Server Active. Gunakan request POST untuk mengambil data.'
+        }, 200)
+
     def do_POST(self):
         content_length = int(self.headers.get('Content-Length', 0))
         post_data = self.rfile.read(content_length)
@@ -16,7 +23,6 @@ class handler(BaseHTTPRequestHandler):
                 self._send_json({'error': 'URL tidak boleh kosong'}, 400)
                 return
 
-            # Menggunakan API parser eksternal yang aman dari blokir IP Vercel
             api_endpoint = f"https://www.tikwm.com/api/?url={urllib.parse.quote(url)}"
             
             req = urllib.request.Request(
@@ -27,7 +33,6 @@ class handler(BaseHTTPRequestHandler):
             with urllib.request.urlopen(req, timeout=10) as response:
                 res_data = json.loads(response.read().decode('utf-8'))
 
-            # Cek respon dari API
             if res_data.get('code') != 0 or 'data' not in res_data:
                 self._send_json({'error': 'Gagal mengambil data. Pastikan link video TikTok publik.'}, 400)
                 return
@@ -36,14 +41,13 @@ class handler(BaseHTTPRequestHandler):
             filesize_bytes = info.get('size', 0) or info.get('wm_size', 0)
             filesize_mb = round(filesize_bytes / (1024 * 1024), 2) if filesize_bytes else "N/A"
 
-            # Format data untuk dikirim ke frontend
             result = {
                 'uploader': info.get('author', {}).get('nickname', '-'),
                 'username': info.get('author', {}).get('unique_id', '-'),
                 'title': info.get('title', '-'),
                 'width': info.get('width', 576),
                 'height': info.get('height', 576),
-                'fps': 30, # Standar FPS TikTok
+                'fps': 30,
                 'duration': info.get('duration', 0),
                 'filesize_mb': filesize_mb,
                 'ext': 'MP4'
@@ -60,4 +64,4 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(json.dumps(data).encode('utf-8'))
-            
+        
