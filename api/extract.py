@@ -21,7 +21,6 @@ def get_real_mp4_meta(video_url):
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = resp.read()
 
-        # Jika 'stts' tidak ada di awal, minta 256KB terakhir file (jika moov di akhir)
         if b'stts' not in data:
             req_end = urllib.request.Request(video_url, headers={
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
@@ -30,13 +29,12 @@ def get_real_mp4_meta(video_url):
             with urllib.request.urlopen(req_end, timeout=5) as resp_end:
                 data += resp_end.read()
 
-        # 1. Hitung Real FPS dari 'mdhd' dan 'stts' atom
+        # 1. Hitung Real FPS
         mdhd_idx = data.find(b'mdhd')
         stts_idx = data.find(b'stts')
         
         if mdhd_idx != -1 and stts_idx != -1:
             version = data[mdhd_idx + 4]
-            # timescale offset tergantung versi mdhd
             timescale_offset = mdhd_idx + 24 if version == 1 else mdhd_idx + 16
             timescale = int.from_bytes(data[timescale_offset:timescale_offset + 4], 'big')
             
@@ -44,19 +42,21 @@ def get_real_mp4_meta(video_url):
             
             if sample_delta > 0 and timescale > 0:
                 calc_fps = round(timescale / sample_delta)
-                if 10 <= calc_fps <= 240:  # Validasi range FPS wajar (10 - 240 FPS)
+                if 10 <= calc_fps <= 240:
                     fps = calc_fps
 
-        # 2. Ambil Resolusi Presisi dari 'tkhd' atom
+        # 2. Ambil Resolusi Presisi
         tkhd_idx = data.find(b'tkhd')
         if tkhd_idx != -1:
             version = data[tkhd_idx + 4]
             w_offset = tkhd_idx + 88 if version == 1 else tkhd_idx + 76
             h_offset = tkhd_idx + 92 if version == 1 else tkhd_idx + 80
-            if h_offset + 2 <= len(data):
-                w = int.from_bytes(data[w_offset:w_offset + 2], 'big')
-                h = int.from_bytes(data[h_offset:h_offset + 2], 'big')
-                if w > 0 and h > 0:
+            
+            if h_offset + 4 <= len(data):
+                w = int.from_bytes(data[w_offset:w_offset + 4], 'big') >> 16
+                h = int.from_bytes(data[h_offset:h_offset + 4], 'big') >> 16
+                
+                if 100 <= w <= 4096 and 100 <= h <= 4096:
                     width = w
                     height = h
 
@@ -126,6 +126,7 @@ HTML_UI = """<!DOCTYPE html>
         <div class="row"><span>Uploader</span> <strong id="uploader">-</strong></div>
         <div class="row"><span>Resolusi</span> <strong id="res">-</strong></div>
         <div class="row"><span>Frame Rate (FPS)</span> <strong id="fps">-</strong></div>
+        <div class="row"><span>Bitrate</span> <strong id="bitrate">-</strong></div>
         <div class="row"><span>Durasi</span> <strong id="duration">-</strong></div>
         <div class="row"><span>Ukuran File</span> <strong id="filesize">-</strong></div>
         <div class="row"><span>Format</span> <strong id="format">-</strong></div>
@@ -165,6 +166,7 @@ HTML_UI = """<!DOCTYPE html>
         document.getElementById('uploader').innerText = `${data.uploader} (@${data.username})`;
         document.getElementById('res').innerText = `${data.width} x ${data.height}`;
         document.getElementById('fps').innerText = `${data.fps} fps`;
+        document.getElementById('bitrate').innerText = data.bitrate;
         document.getElementById('duration').innerText = `${data.duration}s`;
         document.getElementById('filesize').innerText = `~${data.filesize_mb} MB`;
         document.getElementById('format').innerText = (data.ext || 'MP4').toUpperCase();
@@ -215,35 +217,50 @@ class handler(BaseHTTPRequestHandler):
                 return
 
             info = res_data['data']
-            
-            # Prioritaskan link HD jika tersedia
             video_stream_url = info.get('hdplay') or info.get('play')
             
-            # Nilai awal dari API
-            res_width = info.get('width', 0)
-            res_height = info.get('height', 0)
-            real_fps = 30  # default fallback jika header tidak terbaca
+            api_width = info.get('width', 0)
+            api_height = info.get('height', 0)
+            
+            final_width = api_width
+            final_height = api_height
+            real_fps = 30
 
-            # Jalankan Inspeksi Header MP4
             if video_stream_url:
                 parsed_fps, parsed_w, parsed_h = get_real_mp4_meta(video_stream_url)
                 if parsed_fps:
                     real_fps = parsed_fps
                 if parsed_w and parsed_h:
-                    res_width = parsed_w
-                    res_height = parsed_h
+                    final_width = parsed_w
+                    final_height = parsed_h
+
+            if not final_width or final_width < 100 or final_width > 4096:
+                final_width = api_width if api_width > 0 else 1080
+            if not final_height or final_height < 100 or final_height > 4096:
+                final_height = api_height if api_height > 0 else 1920
 
             filesize_bytes = info.get('hd_size', 0) or info.get('size', 0) or info.get('wm_size', 0)
             filesize_mb = round(filesize_bytes / (1024 * 1024), 2) if filesize_bytes else "N/A"
+            duration = info.get('duration', 0)
+
+            # Hitung Bitrate
+            bitrate_str = "-"
+            if filesize_bytes > 0 and duration > 0:
+                calc_bitrate_kbps = round((filesize_bytes * 8) / (duration * 1000))
+                if calc_bitrate_kbps >= 1000:
+                    bitrate_str = f"{round(calc_bitrate_kbps / 1000, 2)} Mbps"
+                else:
+                    bitrate_str = f"{calc_bitrate_kbps} kbps"
 
             result = {
                 'uploader': info.get('author', {}).get('nickname', '-'),
                 'username': info.get('author', {}).get('unique_id', '-'),
                 'title': info.get('title', '-'),
-                'width': res_width if res_width > 0 else 1080,
-                'height': res_height if res_height > 0 else 1920,
+                'width': final_width,
+                'height': final_height,
                 'fps': real_fps,
-                'duration': info.get('duration', 0),
+                'bitrate': bitrate_str,
+                'duration': duration,
                 'filesize_mb': filesize_mb,
                 'ext': 'MP4'
             }
@@ -259,4 +276,3 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(json.dumps(data).encode('utf-8'))
-      
