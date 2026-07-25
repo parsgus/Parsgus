@@ -71,7 +71,6 @@ def get_real_mp4_meta(video_url):
             else:
                 moov_data = data[moov_idx + 4 : moov_box_start + moov_size]
 
-            # Cari semua box track ('trak') di dalam 'moov'
             traks = find_all_sub_boxes(moov_data, b'trak')
 
             for trak in traks:
@@ -83,12 +82,10 @@ def get_real_mp4_meta(video_url):
                 if not hdlr or len(hdlr) < 12:
                     continue
                 
-                # KUNCI UTAMA: Filter khusus Video Track ('vide')
                 handler_type = hdlr[8:12]
                 if handler_type != b'vide':
                     continue
 
-                # 1. Ambil Timescale dari Video Track
                 mdhd = find_sub_box(mdia, b'mdhd')
                 timescale = None
                 if mdhd and len(mdhd) >= 16:
@@ -98,7 +95,6 @@ def get_real_mp4_meta(video_url):
                     elif version == 0:
                         timescale = int.from_bytes(mdhd[12:16], 'big')
 
-                # 2. Ambil Resolusi dari tkhd Video Track
                 tkhd = find_sub_box(trak, b'tkhd')
                 if tkhd and len(tkhd) >= 76:
                     version = tkhd[0]
@@ -114,7 +110,6 @@ def get_real_mp4_meta(video_url):
                     if w and h and 100 <= w <= 4096 and 100 <= h <= 4096:
                         width, height = w, h
 
-                # 3. Ambil FPS dari stts Video Track
                 minf = find_sub_box(mdia, b'minf')
                 stbl = find_sub_box(minf, b'stbl') if minf else None
                 stts = find_sub_box(stbl, b'stts') if stbl else None
@@ -139,7 +134,6 @@ def get_real_mp4_meta(video_url):
                     if fps_counts:
                         fps = max(fps_counts.items(), key=lambda x: x[1])[0]
 
-                # Setelah video track selesai diproses, hentikan loop
                 break
 
     except Exception:
@@ -148,13 +142,13 @@ def get_real_mp4_meta(video_url):
     return fps, width, height
 
 
-# HTML UI Frontend
+# HTML UI Frontend (Desain Baru + Links Sosial)
 HTML_UI = """<!DOCTYPE html>
 <html lang="id">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>parsgus — TikTok Metadata & Stream Analyzer</title>
+  <title>Parsgus — TikTok Metadata & Stream Analyzer</title>
   <style>
     :root {
       --bg-color: #0b0f12;
@@ -166,18 +160,89 @@ HTML_UI = """<!DOCTYPE html>
       --border-color: #222933;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
-    body { background-color: var(--bg-color); color: var(--text-main); display: flex; flex-direction: column; align-items: center; min-height: 100vh; padding: 20px; }
-    header { width: 100%; max-width: 440px; padding: 24px 0 16px; text-align: center; border-bottom: 1px solid var(--border-color); margin-bottom: 24px; }
-    header h1 { font-size: 2rem; font-weight: 800; color: var(--accent-green); letter-spacing: -0.5px; text-transform: lowercase; }
-    header p { font-size: 0.85rem; color: var(--text-muted); margin-top: 4px; }
+    body { 
+      background-color: var(--bg-color); 
+      color: var(--text-main); 
+      display: flex; 
+      flex-direction: column; 
+      align-items: center; 
+      min-height: 100vh; 
+      padding: 20px; 
+    }
+    header { 
+      width: 100%; 
+      max-width: 440px; 
+      padding: 24px 0 16px; 
+      text-align: center; 
+      border-bottom: 1px solid var(--border-color); 
+      margin-bottom: 24px; 
+    }
+    header h1 { 
+      font-size: 2.2rem; 
+      font-weight: 800; 
+      color: var(--accent-green); 
+      letter-spacing: -0.5px; 
+    }
+    header p { 
+      font-size: 0.85rem; 
+      color: var(--text-muted); 
+      margin-top: 4px; 
+    }
+    .social-links {
+      margin-top: 10px;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+    .social-links a {
+      color: var(--accent-green);
+      text-decoration: none;
+      font-weight: 700;
+      transition: all 0.2s ease;
+      border-bottom: 1px dashed var(--accent-green);
+    }
+    .social-links a:hover {
+      color: #34d399;
+      border-bottom-style: solid;
+    }
     .container { width: 100%; max-width: 440px; }
-    .card { background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 16px; padding: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.4); }
+    .card { 
+      background: var(--card-bg); 
+      border: 1px solid var(--border-color); 
+      border-radius: 16px; 
+      padding: 24px; 
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5); 
+    }
     .input-group { display: flex; flex-direction: column; gap: 12px; }
     label { font-size: 0.85rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
-    input[type="text"] { width: 100%; padding: 14px 16px; background: #0b0f12; border: 1px solid var(--border-color); border-radius: 10px; color: var(--text-main); font-size: 0.95rem; outline: none; transition: border-color 0.2s; }
+    input[type="text"] { 
+      width: 100%; 
+      padding: 14px 16px; 
+      background: #0b0f12; 
+      border: 1px solid var(--border-color); 
+      border-radius: 10px; 
+      color: var(--text-main); 
+      font-size: 0.95rem; 
+      outline: none; 
+      transition: border-color 0.2s; 
+    }
     input[type="text"]:focus { border-color: var(--accent-green); }
-    button { width: 100%; padding: 14px; background: var(--accent-green); color: #0b0f12; font-size: 0.95rem; font-weight: 700; border: none; border-radius: 10px; cursor: pointer; transition: background 0.2s; }
-    button:hover { background: var(--accent-green-hover); }
+    button { 
+      width: 100%; 
+      padding: 14px; 
+      background: var(--accent-green); 
+      color: #0b0f12; 
+      font-size: 0.95rem; 
+      font-weight: 700; 
+      border: none; 
+      border-radius: 10px; 
+      cursor: pointer; 
+      transition: all 0.2s; 
+      box-shadow: 0 4px 14px rgba(16, 185, 129, 0.2);
+    }
+    button:hover { 
+      background: var(--accent-green-hover); 
+      transform: translateY(-1px);
+    }
     .loading { display: none; text-align: center; margin-top: 20px; color: var(--accent-green); font-size: 0.9rem; font-weight: 600; }
     .result { display: none; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border-color); }
     .result h3 { font-size: 0.85rem; color: var(--accent-green); margin-bottom: 16px; text-transform: uppercase; letter-spacing: 0.8px; }
@@ -189,8 +254,11 @@ HTML_UI = """<!DOCTYPE html>
 </head>
 <body>
   <header>
-    <h1>parsgus</h1>
+    <h1>Parsgus</h1>
     <p>TikTok Metadata & Stream Analyzer</p>
+    <div class="social-links">
+      follow <a href="https://tiktok.com/@parsgus" target="_blank" rel="noopener">TikTok</a> and join <a href="https://t.me/parsgus" target="_blank" rel="noopener">Telegram</a>
+    </div>
   </header>
 
   <main class="container">
@@ -357,4 +425,4 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(json.dumps(data).encode('utf-8'))
-                        
+                
