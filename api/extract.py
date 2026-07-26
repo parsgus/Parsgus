@@ -191,7 +191,7 @@ def get_real_mp4_meta(video_url):
 
 
 # ==============================================================================
-# 3. FRONTEND HTML UI
+# 3. FRONTEND HTML UI (META TAG 736x736 FAVICON & OPEN GRAPH)
 # ==============================================================================
 HTML_UI = """<!DOCTYPE html>
 <html lang="id">
@@ -199,6 +199,31 @@ HTML_UI = """<!DOCTYPE html>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Parsgus — TikTok Metadata & Stream Analyzer</title>
+
+  <!-- FAVICON -->
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <link rel="apple-touch-icon" href="/favicon.ico">
+
+  <!-- PRIMARY META TAGS -->
+  <meta name="title" content="Parsgus — TikTok Metadata & Stream Analyzer">
+  <meta name="description" content="Analisis statistik video TikTok, FPS, resolusi, bitrate, dan stream metadata secara presisi.">
+
+  <!-- OPEN GRAPH / FACEBOOK / WHATSAPP / TELEGRAM (RASIO 1:1 - 736x736) -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://parsgus.vercel.app/">
+  <meta property="og:title" content="Parsgus — TikTok Metadata & Stream Analyzer">
+  <meta property="og:description" content="Analisis statistik video TikTok, FPS, resolusi, bitrate, dan stream metadata secara presisi.">
+  <meta property="og:image" content="https://parsgus.vercel.app/og-image.png">
+  <meta property="og:image:width" content="736">
+  <meta property="og:image:height" content="736">
+
+  <!-- TWITTER / X -->
+  <meta property="twitter:card" content="summary">
+  <meta property="twitter:url" content="https://parsgus.vercel.app/">
+  <meta property="twitter:title" content="Parsgus — TikTok Metadata & Stream Analyzer">
+  <meta property="twitter:description" content="Analisis statistik video TikTok, FPS, resolusi, bitrate, dan stream metadata secara presisi.">
+  <meta property="twitter:image" content="https://parsgus.vercel.app/og-image.png">
+
   <style>
     :root {
       --bg-color: #0b0f12;
@@ -470,7 +495,7 @@ class handler(BaseHTTPRequestHandler):
                 'ext': 'MP4'
             }
 
-            # --- SIMPAN KE MONGODB SECARA AMAN (TIDAK MEMBLOKIR RESPONS KLIEN) ---
+            # --- SIMPAN KE MONGODB SECARA AMAN ---
             db = get_db()
             if db is not None:
                 try:
@@ -497,4 +522,4 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(json.dumps(data).encode('utf-8'))
-    
+        
